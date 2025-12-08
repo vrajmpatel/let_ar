@@ -2,15 +2,16 @@
 
 import { Canvas } from "@react-three/fiber";
 import { Environment, OrbitControls } from "@react-three/drei";
-import { HandModel, Quaternion } from "./HandModel";
+import { HandModel, Quaternion, LinearAccel } from "./HandModel";
 import { CoordinateAxes } from "./CoordinateAxes";
 import { Suspense } from "react";
 
 interface SceneContainerProps {
     quaternion?: Quaternion | null;
+    linearAccel?: LinearAccel | null;
 }
 
-export function SceneContainer({ quaternion }: SceneContainerProps) {
+export function SceneContainer({ quaternion, linearAccel }: SceneContainerProps) {
     return (
         <div className="w-full h-full bg-gradient-to-b from-zinc-900 to-black relative">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-500/5 via-transparent to-transparent opacity-40" />
@@ -32,7 +33,7 @@ export function SceneContainer({ quaternion }: SceneContainerProps) {
                     />
                     <Environment preset="city" />
 
-                    <HandModel position={[0, 0, 0]} scale={0.8} quaternion={quaternion} />
+                    <HandModel position={[0, 0, 0]} scale={0.8} quaternion={quaternion} linearAccel={linearAccel} />
 
                     {/* User Coordinate System Legend - bottom left corner */}
                     <CoordinateAxes />

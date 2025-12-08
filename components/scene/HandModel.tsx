@@ -9,10 +9,17 @@ export interface Quaternion {
     z: number;
 }
 
+export interface LinearAccel {
+    x: number;
+    y: number;
+    z: number;
+}
+
 interface HandModelProps {
     position?: [number, number, number];
     scale?: number | [number, number, number];
     quaternion?: Quaternion | null;
+    linearAccel?: LinearAccel | null;
 }
 
 function Finger({ position, scale }: { position: [number, number, number], scale: [number, number, number] }) {
@@ -43,9 +50,10 @@ function Joint({ position }: { position: [number, number, number] }) {
     );
 }
 
-export function HandModel({ quaternion, ...props }: HandModelProps) {
+export function HandModel({ quaternion, linearAccel, ...props }: HandModelProps) {
     const groupRef = useRef<THREE.Group>(null);
     const targetQuaternion = useRef(new THREE.Quaternion());
+    const targetPosition = useRef(new THREE.Vector3(0, 0, 0));
     const hasQuaternion = quaternion !== null && quaternion !== undefined;
 
     // Update target quaternion when prop changes
@@ -62,11 +70,32 @@ export function HandModel({ quaternion, ...props }: HandModelProps) {
         }
     }, [quaternion]);
 
+    // Update target position when linearAccel changes
+    useEffect(() => {
+        if (linearAccel) {
+            // Map acceleration to position offset (rubber band effect)
+            // Scale factor determines how far the hand moves per m/s^2
+            // Note: Axis mapping might need adjustment to match visual orientation
+            // Assuming: +y is up (against gravity), +x is right, +z is forward
+            const scale = 0.1;
+            targetPosition.current.set(
+                linearAccel.x * scale,
+                linearAccel.y * scale,
+                linearAccel.z * scale
+            );
+        } else {
+            targetPosition.current.set(0, 0, 0);
+        }
+    }, [linearAccel]);
+
     useFrame((state) => {
         if (groupRef.current) {
             if (hasQuaternion) {
                 // Smoothly interpolate to the target quaternion from the sensor
                 groupRef.current.quaternion.slerp(targetQuaternion.current, 0.15);
+
+                // Smoothly interpolate position (rubber band effect)
+                groupRef.current.position.lerp(targetPosition.current, 0.1);
             } else {
                 // Gentle floating animation when no quaternion data
                 groupRef.current.position.y = Math.sin(state.clock.elapsedTime * 0.5) * 0.1;

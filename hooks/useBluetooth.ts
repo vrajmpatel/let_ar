@@ -180,6 +180,8 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
     const deviceRef = useRef<BluetoothDevice | null>(null);
     const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
     const entryIdRef = useRef(2);
+    // Persistent buffer to handle fragmented BLE packets
+    const incomingBufferRef = useRef<Uint8Array>(new Uint8Array(0));
 
     const addEntry = useCallback((type: TerminalEntry['type'], message: string, data?: { quaternion?: TerminalEntry['quaternion'], linearAccel?: TerminalEntry['linearAccel'] }) => {
         const entry: TerminalEntry = {
@@ -206,76 +208,102 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
 
         if (!value) return;
 
-        // BLE UART may combine multiple packets into a single notification
-        // We need to scan through the buffer and parse each packet
-        const buffer = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        // Append new data to the persistent buffer
+        const newBytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        const currentBuffer = incomingBufferRef.current;
+        const newBuffer = new Uint8Array(currentBuffer.length + newBytes.length);
+        newBuffer.set(currentBuffer);
+        newBuffer.set(newBytes, currentBuffer.length);
+        incomingBufferRef.current = newBuffer;
+
+        const buffer = incomingBufferRef.current;
         let offset = 0;
 
         while (offset < buffer.length) {
+            // Check if we have enough bytes for at least a header (2 bytes)
+            if (offset + 1 >= buffer.length) break;
+
             // Look for start marker '!'
             if (buffer[offset] !== 0x21) {
                 offset++;
                 continue;
             }
 
-            // Check if we have enough bytes for the identifier
-            if (offset + 1 >= buffer.length) break;
-
             const identifier = buffer[offset + 1];
 
             // Try quaternion packet ('Q' = 0x51, 20 bytes)
-            if (identifier === 0x51 && offset + 20 <= buffer.length) {
-                const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 20);
-                const quaternion = parseQuaternionPacket(packetView);
+            if (identifier === 0x51) {
+                if (offset + 20 <= buffer.length) {
+                    const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 20);
+                    const quaternion = parseQuaternionPacket(packetView);
 
-                if (quaternion) {
-                    const message = `Q: w=${quaternion.w.toFixed(4)} x=${quaternion.x.toFixed(4)} y=${quaternion.y.toFixed(4)} z=${quaternion.z.toFixed(4)}`;
-                    addEntry('data', message, { quaternion });
+                    if (quaternion) {
+                        const message = `Q: w=${quaternion.w.toFixed(4)} x=${quaternion.x.toFixed(4)} y=${quaternion.y.toFixed(4)} z=${quaternion.z.toFixed(4)}`;
+                        addEntry('data', message, { quaternion });
 
-                    if (onQuaternion) {
-                        onQuaternion(quaternion);
+                        if (onQuaternion) {
+                            onQuaternion(quaternion);
+                        }
+                        offset += 20;
+                        continue;
                     }
-                    offset += 20;
-                    continue;
+                } else {
+                    // Start marker found but packet incomplete, stop processing to wait for more data
+                    break;
                 }
             }
 
             // Try magnetometer packet ('M' = 0x4D, 16 bytes)
-            if (identifier === 0x4D && offset + 16 <= buffer.length) {
-                const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 16);
-                const magnetometer = parseMagnetometerPacket(packetView);
+            if (identifier === 0x4D) {
+                if (offset + 16 <= buffer.length) {
+                    const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 16);
+                    const magnetometer = parseMagnetometerPacket(packetView);
 
-                if (magnetometer) {
-                    const message = `M: x=${magnetometer.x.toFixed(2)} y=${magnetometer.y.toFixed(2)} z=${magnetometer.z.toFixed(2)} µT`;
-                    addEntry('data', message);
+                    if (magnetometer) {
+                        const message = `M: x=${magnetometer.x.toFixed(2)} y=${magnetometer.y.toFixed(2)} z=${magnetometer.z.toFixed(2)} µT`;
+                        addEntry('data', message);
 
-                    if (onMagnetometer) {
-                        onMagnetometer(magnetometer);
+                        if (onMagnetometer) {
+                            onMagnetometer(magnetometer);
+                        }
+                        offset += 16;
+                        continue;
                     }
-                    offset += 16;
-                    continue;
+                } else {
+                    // Start marker found but packet incomplete, stop processing to wait for more data
+                    break;
                 }
             }
 
             // Try linear acceleration packet ('A' = 0x41, 16 bytes)
-            if (identifier === 0x41 && offset + 16 <= buffer.length) {
-                const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 16);
-                const linearAccel = parseLinearAccelPacket(packetView);
+            if (identifier === 0x41) {
+                if (offset + 16 <= buffer.length) {
+                    const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 16);
+                    const linearAccel = parseLinearAccelPacket(packetView);
 
-                if (linearAccel) {
-                    const message = `A: x=${linearAccel.x.toFixed(2)} y=${linearAccel.y.toFixed(2)} z=${linearAccel.z.toFixed(2)} m/s²`;
-                    addEntry('data', message, { linearAccel });
+                    if (linearAccel) {
+                        const message = `A: x=${linearAccel.x.toFixed(2)} y=${linearAccel.y.toFixed(2)} z=${linearAccel.z.toFixed(2)} m/s²`;
+                        addEntry('data', message, { linearAccel });
 
-                    if (onLinearAccel) {
-                        onLinearAccel(linearAccel);
+                        if (onLinearAccel) {
+                            onLinearAccel(linearAccel);
+                        }
+                        offset += 16;
+                        continue;
                     }
-                    offset += 16;
-                    continue;
+                } else {
+                    // Start marker found but packet incomplete, stop processing to wait for more data
+                    break;
                 }
             }
 
             // Unknown packet type or parsing failed, skip this byte
             offset++;
+        }
+
+        // Keep remaining bytes in buffer
+        if (offset > 0) {
+            incomingBufferRef.current = buffer.slice(offset);
         }
     }, [addEntry, onQuaternion, onLinearAccel, onMagnetometer]);
 
@@ -369,6 +397,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         });
 
         addEntry('system', 'Disconnected from device.');
+
+        // Reset buffer on disconnect
+        incomingBufferRef.current = new Uint8Array(0);
     }, [addEntry, handleNotification]);
 
     const clearEntries = useCallback(() => {

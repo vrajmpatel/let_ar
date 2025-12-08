@@ -12,6 +12,7 @@ export interface TerminalEntry {
     type: 'system' | 'data' | 'error';
     message: string;
     quaternion?: { w: number; x: number; y: number; z: number };
+    linearAccel?: { x: number; y: number; z: number };
 }
 
 export interface BluetoothState {
@@ -109,12 +110,60 @@ function parseMagnetometerPacket(data: DataView): { x: number; y: number; z: num
     return { x, y, z };
 }
 
+/**
+ * Parse a 16-byte linear acceleration packet from the QuatStream device
+ * Packet format:
+ *   Byte 0:     '!'  (start marker)
+ *   Byte 1:     'A'  (linear acceleration identifier)
+ *   Bytes 2-5:  accel_x (float, 4 bytes, little-endian) - m/s²
+ *   Bytes 6-9:  accel_y (float, 4 bytes, little-endian) - m/s²
+ *   Bytes 10-13: accel_z (float, 4 bytes, little-endian) - m/s²
+ *   Byte 14:    checksum (~sum of bytes 0-13)
+ *   Byte 15:    newline '\n'
+ * 
+ * Linear acceleration is acceleration with gravity removed.
+ * Citation: BNO085 datasheet - "acceleration minus gravity" in m/s²
+ */
+function parseLinearAccelPacket(data: DataView): { x: number; y: number; z: number } | null {
+    if (data.byteLength < 16) {
+        return null;
+    }
+
+    // Verify start marker and identifier
+    const startMarker = data.getUint8(0);
+    const identifier = data.getUint8(1);
+
+    if (startMarker !== 0x21 || identifier !== 0x41) { // '!' and 'A'
+        return null;
+    }
+
+    // Verify checksum
+    let checksum = 0;
+    for (let i = 0; i < 14; i++) {
+        checksum += data.getUint8(i);
+    }
+    checksum = (~checksum) & 0xFF;
+
+    if (data.getUint8(14) !== checksum) {
+        return null;
+    }
+
+    // Parse linear acceleration floats (little-endian) - values in m/s²
+    const x = data.getFloat32(2, true);
+    const y = data.getFloat32(6, true);
+    const z = data.getFloat32(10, true);
+
+    return { x, y, z };
+}
+
 export interface UseBluetoothOptions {
     onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
+    onLinearAccel?: (a: { x: number; y: number; z: number }) => void;
+    onMagnetometer?: (m: { x: number; y: number; z: number }) => void;
 }
 
 export function useBluetooth(options: UseBluetoothOptions = {}) {
-    const { onQuaternion } = options;
+    const { onQuaternion, onLinearAccel, onMagnetometer } = options;
 
     const [state, setState] = useState<BluetoothState>({
         isConnected: false,
@@ -132,13 +181,14 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
     const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
     const entryIdRef = useRef(2);
 
-    const addEntry = useCallback((type: TerminalEntry['type'], message: string, quaternion?: TerminalEntry['quaternion']) => {
+    const addEntry = useCallback((type: TerminalEntry['type'], message: string, data?: { quaternion?: TerminalEntry['quaternion'], linearAccel?: TerminalEntry['linearAccel'] }) => {
         const entry: TerminalEntry = {
             id: entryIdRef.current++,
             timestamp: new Date(),
             type,
             message,
-            quaternion,
+            quaternion: data?.quaternion,
+            linearAccel: data?.linearAccel,
         };
         setEntries(prev => {
             // Keep only last 100 entries to prevent memory issues
@@ -180,7 +230,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
 
                 if (quaternion) {
                     const message = `Q: w=${quaternion.w.toFixed(4)} x=${quaternion.x.toFixed(4)} y=${quaternion.y.toFixed(4)} z=${quaternion.z.toFixed(4)}`;
-                    addEntry('data', message, quaternion);
+                    addEntry('data', message, { quaternion });
 
                     if (onQuaternion) {
                         onQuaternion(quaternion);
@@ -198,6 +248,27 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                 if (magnetometer) {
                     const message = `M: x=${magnetometer.x.toFixed(2)} y=${magnetometer.y.toFixed(2)} z=${magnetometer.z.toFixed(2)} µT`;
                     addEntry('data', message);
+
+                    if (onMagnetometer) {
+                        onMagnetometer(magnetometer);
+                    }
+                    offset += 16;
+                    continue;
+                }
+            }
+
+            // Try linear acceleration packet ('A' = 0x41, 16 bytes)
+            if (identifier === 0x41 && offset + 16 <= buffer.length) {
+                const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 16);
+                const linearAccel = parseLinearAccelPacket(packetView);
+
+                if (linearAccel) {
+                    const message = `A: x=${linearAccel.x.toFixed(2)} y=${linearAccel.y.toFixed(2)} z=${linearAccel.z.toFixed(2)} m/s²`;
+                    addEntry('data', message, { linearAccel });
+
+                    if (onLinearAccel) {
+                        onLinearAccel(linearAccel);
+                    }
                     offset += 16;
                     continue;
                 }
@@ -206,7 +277,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
             // Unknown packet type or parsing failed, skip this byte
             offset++;
         }
-    }, [addEntry, onQuaternion]);
+    }, [addEntry, onQuaternion, onLinearAccel, onMagnetometer]);
 
     const connect = useCallback(async () => {
         // Check if Web Bluetooth is supported
@@ -264,7 +335,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                 error: null,
             });
 
-            addEntry('system', `Connected to ${device.name}! Receiving quaternion data...`);
+            addEntry('system', `Connected to ${device.name}! Receiving quaternion, magnetometer, and acceleration data...`);
 
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to connect';

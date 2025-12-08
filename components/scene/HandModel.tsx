@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, ThreeElements } from "@react-three/fiber";
 import * as THREE from "three";
 
 function Finger({ position, scale }: { position: [number, number, number], scale: [number, number, number] }) {
@@ -30,7 +30,7 @@ function Joint({ position }: { position: [number, number, number] }) {
     );
 }
 
-export function HandModel(props: JSX.IntrinsicElements['group']) {
+export function HandModel(props: ThreeElements['group']) {
     const groupRef = useRef<THREE.Group>(null);
 
     useFrame((state) => {

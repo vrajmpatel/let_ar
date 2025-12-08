@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 /*
- * QUATERNION BLE STREAMER with BNO085 IMU
+ * QUATERNION + MAGNETOMETER BLE STREAMER with BNO085 IMU
  * for Adafruit LED Glasses Driver (nRF52840)
  * 
- * This sketch reads quaternion data from a BNO085 9-DoF IMU via I2C
- * and streams it over BLE UART at the maximum possible rate.
+ * This sketch reads quaternion and magnetometer data from a BNO085 9-DoF IMU 
+ * via I2C and streams it over BLE UART at the maximum possible rate.
  * The onboard LED blinks on each transmission.
  * 
  * Hardware:
@@ -33,6 +33,22 @@
  *   Bytes 14-17: z (float, 4 bytes)
  *   Byte 18:    checksum (~sum of bytes 0-17)
  *   Byte 19:    newline '\n'
+ * 
+ * Magnetometer Packet Format (16 bytes):
+ *   Byte 0:     '!'  (start marker)
+ *   Byte 1:     'M'  (magnetometer identifier)
+ *   Bytes 2-5:  mag_x (float, 4 bytes) - micro Tesla (µT)
+ *   Bytes 6-9:  mag_y (float, 4 bytes) - micro Tesla (µT)
+ *   Bytes 10-13: mag_z (float, 4 bytes) - micro Tesla (µT)
+ *   Byte 14:    checksum (~sum of bytes 0-13)
+ *   Byte 15:    newline '\n'
+ * 
+ * Magnetometer Units:
+ *   The BNO085 SH2_MAGNETIC_FIELD_CALIBRATED report provides calibrated
+ *   magnetic field readings in micro Tesla (µT). No conversion needed.
+ *   Citation: Adafruit BNO085 datasheet, Page 31:
+ *   "Magnetic Field Strength Vector / Magnetometer: Three axes of magnetic 
+ *   field sensing in micro Teslas (uT)"
  */
 
 #include <Wire.h>
@@ -76,14 +92,25 @@ float quat_w = 1.0f;
 float quat_x = 0.0f;
 float quat_y = 0.0f;
 float quat_z = 0.0f;
+bool newQuatData = false;
+
+// Magnetometer data (in micro Tesla, µT)
+// Citation: BNO085 datasheet - "Three axes of magnetic field sensing in micro Teslas (uT)"
+float mag_x = 0.0f;
+float mag_y = 0.0f;
+float mag_z = 0.0f;
+bool newMagData = false;
 
 // Statistics
 uint32_t packetCount = 0;
+uint32_t magPacketCount = 0;
 uint32_t lastStatsTime = 0;
 uint32_t imuReadCount = 0;
+uint32_t magReadCount = 0;
 
-// Packet buffer
+// Packet buffers
 uint8_t quatPacket[20];
+uint8_t magPacket[16];
 
 // ============================================================================
 // LED CONTROL
@@ -115,13 +142,28 @@ void ledBlink(int times, int delayMs) {
 // ============================================================================
 
 void setReports() {
-  Serial.println("Setting rotation vector report...");
+  Serial.println("Setting sensor reports...");
   
   // Enable rotation vector (quaternion) at fastest rate
+  // Citation: BNO085 datasheet - "Absolute Orientation / Rotation Vector: 
+  // Four-point quaternion output for accurate data manipulation"
   if (!bno08x.enableReport(SH2_ROTATION_VECTOR, REPORT_INTERVAL_US)) {
     Serial.println("Could not enable rotation vector report");
   } else {
     Serial.print("Rotation vector enabled at ");
+    Serial.print(1000000 / REPORT_INTERVAL_US);
+    Serial.println(" Hz");
+  }
+  
+  // Enable calibrated magnetometer report
+  // Citation: BNO085 datasheet, Page 31 - "Magnetic Field Strength Vector / Magnetometer:
+  // Three axes of magnetic field sensing in micro Teslas (uT)"
+  // The SH2_MAGNETIC_FIELD_CALIBRATED report provides pre-calibrated readings
+  // already in physical units (µT) - no LSB conversion needed.
+  if (!bno08x.enableReport(SH2_MAGNETIC_FIELD_CALIBRATED, REPORT_INTERVAL_US)) {
+    Serial.println("Could not enable magnetometer report");
+  } else {
+    Serial.print("Magnetometer enabled at ");
     Serial.print(1000000 / REPORT_INTERVAL_US);
     Serial.println(" Hz");
   }
@@ -162,7 +204,7 @@ bool setupIMU() {
 }
 
 // ============================================================================
-// QUATERNION PACKET BUILDING
+// PACKET BUILDING
 // ============================================================================
 
 void buildQuaternionPacket(float w, float x, float y, float z) {
@@ -194,6 +236,39 @@ void buildQuaternionPacket(float w, float x, float y, float z) {
   quatPacket[19] = '\n';
 }
 
+/*
+ * Build magnetometer packet (16 bytes)
+ * Values are in micro Tesla (µT) - already calibrated by BNO085
+ * Citation: Adafruit BNO085 datasheet, Page 31
+ */
+void buildMagnetometerPacket(float mx, float my, float mz) {
+  uint8_t checksum = 0;
+  
+  // Start marker
+  magPacket[0] = '!';
+  checksum += '!';
+  
+  // Magnetometer identifier
+  magPacket[1] = 'M';
+  checksum += 'M';
+  
+  // Copy float values (little-endian) - units: micro Tesla (µT)
+  memcpy(&magPacket[2], &mx, 4);
+  memcpy(&magPacket[6], &my, 4);
+  memcpy(&magPacket[10], &mz, 4);
+  
+  // Calculate checksum over float bytes
+  for (int i = 2; i < 14; i++) {
+    checksum += magPacket[i];
+  }
+  
+  // Checksum (inverted sum)
+  magPacket[14] = ~checksum;
+  
+  // Newline terminator
+  magPacket[15] = '\n';
+}
+
 // ============================================================================
 // BLE CALLBACKS
 // ============================================================================
@@ -202,10 +277,11 @@ void connect_callback(uint16_t conn_handle) {
   (void)conn_handle;
   isConnected = true;
   packetCount = 0;
+  magPacketCount = 0;
   lastStatsTime = millis();
   
   Serial.println("BLE Connected!");
-  Serial.println("Starting quaternion stream...");
+  Serial.println("Starting quaternion + magnetometer stream...");
   
   // Rapid blink to indicate connection
   ledBlink(5, 50);
@@ -271,9 +347,11 @@ void startAdvertising() {
 // ============================================================================
 
 /*
- * Read quaternion from BNO085. Returns true if new data available.
+ * Read sensor data from BNO085. 
+ * Handles both quaternion and magnetometer reports.
+ * Returns true if any new data is available.
  */
-bool readQuaternion() {
+bool readSensors() {
   if (!imuReady) {
     return false;
   }
@@ -289,11 +367,24 @@ bool readQuaternion() {
   
   switch (sensorValue.sensorId) {
     case SH2_ROTATION_VECTOR:
+      // Quaternion from sensor fusion
       quat_w = sensorValue.un.rotationVector.real;
       quat_x = sensorValue.un.rotationVector.i;
       quat_y = sensorValue.un.rotationVector.j;
       quat_z = sensorValue.un.rotationVector.k;
       imuReadCount++;
+      newQuatData = true;
+      return true;
+      
+    case SH2_MAGNETIC_FIELD_CALIBRATED:
+      // Calibrated magnetometer readings in micro Tesla (µT)
+      // Citation: BNO085 datasheet - values are pre-calibrated, no LSB conversion needed
+      // "Three axes of magnetic field sensing in micro Teslas (uT)"
+      mag_x = sensorValue.un.magneticField.x;
+      mag_y = sensorValue.un.magneticField.y;
+      mag_z = sensorValue.un.magneticField.z;
+      magReadCount++;
+      newMagData = true;
       return true;
       
     default:
@@ -304,7 +395,7 @@ bool readQuaternion() {
 }
 
 // ============================================================================
-// QUATERNION STREAMING
+// DATA STREAMING
 // ============================================================================
 
 /*
@@ -330,6 +421,30 @@ bool streamQuaternion() {
   return false;
 }
 
+/*
+ * Stream magnetometer data over BLE.
+ * Values are in micro Tesla (µT) - already in physical units.
+ * Returns true if packet was sent successfully.
+ */
+bool streamMagnetometer() {
+  if (!isConnected) {
+    return false;
+  }
+  
+  // Build packet with current magnetometer values (µT)
+  buildMagnetometerPacket(mag_x, mag_y, mag_z);
+  
+  // Send via BLE UART
+  uint16_t written = bleuart.write(magPacket, 16);
+  
+  if (written == 16) {
+    magPacketCount++;
+    return true;
+  }
+  
+  return false;
+}
+
 // ============================================================================
 // STATISTICS
 // ============================================================================
@@ -337,18 +452,23 @@ bool streamQuaternion() {
 void printStats() {
   uint32_t now = millis();
   if (now - lastStatsTime >= 1000) {
-    Serial.print("IMU reads/sec: ");
+    Serial.print("Quat reads/sec: ");
     Serial.print(imuReadCount);
+    Serial.print(" | Mag reads/sec: ");
+    Serial.print(magReadCount);
     
     if (isConnected) {
-      Serial.print(" | BLE packets/sec: ");
+      Serial.print(" | BLE Quat pkts: ");
       Serial.print(packetCount);
+      Serial.print(" | BLE Mag pkts: ");
+      Serial.print(magPacketCount);
       Serial.print(" (");
-      Serial.print(packetCount * 20);
+      Serial.print(packetCount * 20 + magPacketCount * 16);
       Serial.print(" bytes/sec)");
     }
     
-    Serial.print(" | Quat: w=");
+    Serial.println();
+    Serial.print("  Quat: w=");
     Serial.print(quat_w, 3);
     Serial.print(" x=");
     Serial.print(quat_x, 3);
@@ -357,8 +477,18 @@ void printStats() {
     Serial.print(" z=");
     Serial.println(quat_z, 3);
     
+    // Magnetometer values in micro Tesla (µT)
+    Serial.print("  Mag (uT): x=");
+    Serial.print(mag_x, 2);
+    Serial.print(" y=");
+    Serial.print(mag_y, 2);
+    Serial.print(" z=");
+    Serial.println(mag_z, 2);
+    
     packetCount = 0;
+    magPacketCount = 0;
     imuReadCount = 0;
+    magReadCount = 0;
     lastStatsTime = now;
   }
 }
@@ -378,10 +508,10 @@ void setup() {
   }
   
   Serial.println();
-  Serial.println("==========================================");
-  Serial.println("  Quaternion BLE Streamer + BNO085 IMU");
-  Serial.println("  Maximum Speed Transmission");
-  Serial.println("==========================================");
+  Serial.println("=============================================");
+  Serial.println("  Quaternion + Magnetometer BLE Streamer");
+  Serial.println("  BNO085 IMU - Maximum Speed Transmission");
+  Serial.println("=============================================");
   Serial.println();
   
   // Initialize LED
@@ -405,16 +535,23 @@ void setup() {
 }
 
 void loop() {
-  // Always try to read IMU (even when not connected)
-  bool newData = readQuaternion();
+  // Always try to read sensors (even when not connected)
+  readSensors();
   
   // Stream over BLE when connected and we have new data
   if (isConnected) {
-    if (newData) {
+    // Send quaternion data if available
+    if (newQuatData) {
       if (streamQuaternion()) {
-        // Toggle LED on each successful transmission
         ledToggle();
       }
+      newQuatData = false;
+    }
+    
+    // Send magnetometer data if available
+    if (newMagData) {
+      streamMagnetometer();
+      newMagData = false;
     }
   } else {
     // Slow blink while waiting for connection
@@ -423,6 +560,9 @@ void loop() {
       ledToggle();
       lastBlink = millis();
     }
+    // Clear flags when not connected
+    newQuatData = false;
+    newMagData = false;
   }
   
   // Print stats every second

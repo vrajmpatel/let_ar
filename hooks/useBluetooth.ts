@@ -66,6 +66,49 @@ function parseQuaternionPacket(data: DataView): { w: number; x: number; y: numbe
     return { w, x, y, z };
 }
 
+/**
+ * Parse a 16-byte magnetometer packet from the QuatStream device
+ * Packet format:
+ *   Byte 0:     '!'  (start marker)
+ *   Byte 1:     'M'  (magnetometer identifier)
+ *   Bytes 2-5:  mag_x (float, 4 bytes, little-endian) - micro Tesla (µT)
+ *   Bytes 6-9:  mag_y (float, 4 bytes, little-endian) - micro Tesla (µT)
+ *   Bytes 10-13: mag_z (float, 4 bytes, little-endian) - micro Tesla (µT)
+ *   Byte 14:    checksum (~sum of bytes 0-13)
+ *   Byte 15:    newline '\n'
+ */
+function parseMagnetometerPacket(data: DataView): { x: number; y: number; z: number } | null {
+    if (data.byteLength < 16) {
+        return null;
+    }
+
+    // Verify start marker and identifier
+    const startMarker = data.getUint8(0);
+    const identifier = data.getUint8(1);
+
+    if (startMarker !== 0x21 || identifier !== 0x4D) { // '!' and 'M'
+        return null;
+    }
+
+    // Verify checksum
+    let checksum = 0;
+    for (let i = 0; i < 14; i++) {
+        checksum += data.getUint8(i);
+    }
+    checksum = (~checksum) & 0xFF;
+
+    if (data.getUint8(14) !== checksum) {
+        return null;
+    }
+
+    // Parse magnetometer floats (little-endian) - values in µT
+    const x = data.getFloat32(2, true);
+    const y = data.getFloat32(6, true);
+    const z = data.getFloat32(10, true);
+
+    return { x, y, z };
+}
+
 export interface UseBluetoothOptions {
     onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
 }
@@ -113,16 +156,55 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
 
         if (!value) return;
 
-        const quaternion = parseQuaternionPacket(value);
+        // BLE UART may combine multiple packets into a single notification
+        // We need to scan through the buffer and parse each packet
+        const buffer = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        let offset = 0;
 
-        if (quaternion) {
-            const message = `Q: w=${quaternion.w.toFixed(4)} x=${quaternion.x.toFixed(4)} y=${quaternion.y.toFixed(4)} z=${quaternion.z.toFixed(4)}`;
-            addEntry('data', message, quaternion);
-
-            // Call the callback to update external state (e.g., 3D scene)
-            if (onQuaternion) {
-                onQuaternion(quaternion);
+        while (offset < buffer.length) {
+            // Look for start marker '!'
+            if (buffer[offset] !== 0x21) {
+                offset++;
+                continue;
             }
+
+            // Check if we have enough bytes for the identifier
+            if (offset + 1 >= buffer.length) break;
+
+            const identifier = buffer[offset + 1];
+
+            // Try quaternion packet ('Q' = 0x51, 20 bytes)
+            if (identifier === 0x51 && offset + 20 <= buffer.length) {
+                const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 20);
+                const quaternion = parseQuaternionPacket(packetView);
+
+                if (quaternion) {
+                    const message = `Q: w=${quaternion.w.toFixed(4)} x=${quaternion.x.toFixed(4)} y=${quaternion.y.toFixed(4)} z=${quaternion.z.toFixed(4)}`;
+                    addEntry('data', message, quaternion);
+
+                    if (onQuaternion) {
+                        onQuaternion(quaternion);
+                    }
+                    offset += 20;
+                    continue;
+                }
+            }
+
+            // Try magnetometer packet ('M' = 0x4D, 16 bytes)
+            if (identifier === 0x4D && offset + 16 <= buffer.length) {
+                const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 16);
+                const magnetometer = parseMagnetometerPacket(packetView);
+
+                if (magnetometer) {
+                    const message = `M: x=${magnetometer.x.toFixed(2)} y=${magnetometer.y.toFixed(2)} z=${magnetometer.z.toFixed(2)} µT`;
+                    addEntry('data', message);
+                    offset += 16;
+                    continue;
+                }
+            }
+
+            // Unknown packet type or parsing failed, skip this byte
+            offset++;
         }
     }, [addEntry, onQuaternion]);
 

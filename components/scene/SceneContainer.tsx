@@ -3,6 +3,7 @@
 import { Canvas } from "@react-three/fiber";
 import { Environment, OrbitControls } from "@react-three/drei";
 import { HandModel } from "./HandModel";
+import { CoordinateAxes } from "./CoordinateAxes";
 import { Suspense } from "react";
 
 export function SceneContainer() {
@@ -28,6 +29,9 @@ export function SceneContainer() {
                     <Environment preset="city" />
 
                     <HandModel position={[0, 0, 0]} scale={0.8} />
+
+                    {/* User Coordinate System Legend - bottom left corner */}
+                    <CoordinateAxes />
                 </Suspense>
             </Canvas>
         </div>

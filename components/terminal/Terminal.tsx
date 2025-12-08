@@ -18,7 +18,11 @@ function EntryIcon({ type }: { type: TerminalEntry['type'] }) {
     }
 }
 
-export function Terminal() {
+interface TerminalProps {
+    onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
+}
+
+export function Terminal({ onQuaternion }: TerminalProps) {
     const {
         isConnected,
         isConnecting,
@@ -27,7 +31,7 @@ export function Terminal() {
         connect,
         disconnect,
         clearEntries,
-    } = useBluetooth();
+    } = useBluetooth({ onQuaternion });
 
     const scrollRef = useRef<HTMLDivElement>(null);
 

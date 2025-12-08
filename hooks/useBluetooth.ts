@@ -66,7 +66,13 @@ function parseQuaternionPacket(data: DataView): { w: number; x: number; y: numbe
     return { w, x, y, z };
 }
 
-export function useBluetooth() {
+export interface UseBluetoothOptions {
+    onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
+}
+
+export function useBluetooth(options: UseBluetoothOptions = {}) {
+    const { onQuaternion } = options;
+
     const [state, setState] = useState<BluetoothState>({
         isConnected: false,
         isConnecting: false,
@@ -112,8 +118,13 @@ export function useBluetooth() {
         if (quaternion) {
             const message = `Q: w=${quaternion.w.toFixed(4)} x=${quaternion.x.toFixed(4)} y=${quaternion.y.toFixed(4)} z=${quaternion.z.toFixed(4)}`;
             addEntry('data', message, quaternion);
+
+            // Call the callback to update external state (e.g., 3D scene)
+            if (onQuaternion) {
+                onQuaternion(quaternion);
+            }
         }
-    }, [addEntry]);
+    }, [addEntry, onQuaternion]);
 
     const connect = useCallback(async () => {
         // Check if Web Bluetooth is supported

@@ -9,9 +9,10 @@ import { Suspense } from "react";
 interface SceneContainerProps {
     quaternion?: Quaternion | null;
     linearAccel?: LinearAccel | null;
+    position?: { x: number; y: number; z: number };
 }
 
-export function SceneContainer({ quaternion, linearAccel }: SceneContainerProps) {
+export function SceneContainer({ quaternion, linearAccel, position }: SceneContainerProps) {
     return (
         <div className="w-full h-full bg-gradient-to-b from-zinc-900 to-black relative">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-500/5 via-transparent to-transparent opacity-40" />
@@ -33,7 +34,7 @@ export function SceneContainer({ quaternion, linearAccel }: SceneContainerProps)
                     />
                     <Environment preset="city" />
 
-                    <HandModel position={[0, 0, 0]} scale={0.8} quaternion={quaternion} linearAccel={linearAccel} />
+                    <HandModel position={position ? [position.x, position.y, position.z] : [0, 0, 0]} scale={0.8} quaternion={quaternion} linearAccel={linearAccel} />
 
                     {/* User Coordinate System Legend - bottom left corner */}
                     <CoordinateAxes />

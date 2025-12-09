@@ -21,9 +21,11 @@ function EntryIcon({ type }: { type: TerminalEntry['type'] }) {
 interface TerminalProps {
     onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
     onLinearAccel?: (a: { x: number; y: number; z: number }) => void;
+    onMagnetometer?: (m: { x: number; y: number; z: number }) => void;
+    onDisconnect?: () => void;
 }
 
-export function Terminal({ onQuaternion, onLinearAccel }: TerminalProps) {
+export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDisconnect }: TerminalProps) {
     const {
         isConnected,
         isConnecting,
@@ -32,7 +34,8 @@ export function Terminal({ onQuaternion, onLinearAccel }: TerminalProps) {
         connect,
         disconnect,
         clearEntries,
-    } = useBluetooth({ onQuaternion, onLinearAccel });
+    } = useBluetooth({ onQuaternion, onLinearAccel, onMagnetometer, onDisconnect });
+
 
     const scrollRef = useRef<HTMLDivElement>(null);
 

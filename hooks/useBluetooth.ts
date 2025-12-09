@@ -160,10 +160,11 @@ export interface UseBluetoothOptions {
     onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
     onLinearAccel?: (a: { x: number; y: number; z: number }) => void;
     onMagnetometer?: (m: { x: number; y: number; z: number }) => void;
+    onDisconnect?: () => void;
 }
 
 export function useBluetooth(options: UseBluetoothOptions = {}) {
-    const { onQuaternion, onLinearAccel, onMagnetometer } = options;
+    const { onQuaternion, onLinearAccel, onMagnetometer, onDisconnect } = options;
 
     const [state, setState] = useState<BluetoothState>({
         isConnected: false,
@@ -333,6 +334,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                 setState(prev => ({ ...prev, isConnected: false, deviceName: null }));
                 addEntry('system', 'Device disconnected.');
                 characteristicRef.current = null;
+                // Reset buffer on disconnect
+                incomingBufferRef.current = new Uint8Array(0);
+                if (onDisconnect) onDisconnect();
             });
 
             // Connect to GATT server
@@ -400,7 +404,8 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
 
         // Reset buffer on disconnect
         incomingBufferRef.current = new Uint8Array(0);
-    }, [addEntry, handleNotification]);
+        if (onDisconnect) onDisconnect();
+    }, [addEntry, handleNotification, onDisconnect]);
 
     const clearEntries = useCallback(() => {
         setEntries([]);

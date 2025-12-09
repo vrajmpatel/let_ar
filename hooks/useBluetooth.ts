@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 // Nordic UART Service UUIDs
 const UART_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
@@ -178,11 +178,29 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         { id: 1, timestamp: new Date(), type: 'system', message: 'Ready to connect to QuatStream device.' },
     ]);
 
+    // Track total packet count separately (entries list is capped at 100)
+    const [packetCount, setPacketCount] = useState(0);
+
     const deviceRef = useRef<BluetoothDevice | null>(null);
     const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
     const entryIdRef = useRef(2);
     // Persistent buffer to handle fragmented BLE packets
     const incomingBufferRef = useRef<Uint8Array>(new Uint8Array(0));
+
+    // Use refs for callbacks to avoid stale closures in notification handler
+    const onQuaternionRef = useRef(onQuaternion);
+    const onLinearAccelRef = useRef(onLinearAccel);
+    const onMagnetometerRef = useRef(onMagnetometer);
+    const onDisconnectRef = useRef(onDisconnect);
+
+    // Keep refs updated with latest callbacks
+    useEffect(() => {
+        onQuaternionRef.current = onQuaternion;
+        onLinearAccelRef.current = onLinearAccel;
+        onMagnetometerRef.current = onMagnetometer;
+        onDisconnectRef.current = onDisconnect;
+    }, [onQuaternion, onLinearAccel, onMagnetometer, onDisconnect]);
+
 
     const addEntry = useCallback((type: TerminalEntry['type'], message: string, data?: { quaternion?: TerminalEntry['quaternion'], linearAccel?: TerminalEntry['linearAccel'] }) => {
         const entry: TerminalEntry = {
@@ -201,6 +219,11 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
             }
             return newEntries;
         });
+
+        // Increment packet count for data entries
+        if (type === 'data') {
+            setPacketCount(prev => prev + 1);
+        }
     }, []);
 
     const handleNotification = useCallback((event: Event) => {
@@ -242,8 +265,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                         const message = `Q: w=${quaternion.w.toFixed(4)} x=${quaternion.x.toFixed(4)} y=${quaternion.y.toFixed(4)} z=${quaternion.z.toFixed(4)}`;
                         addEntry('data', message, { quaternion });
 
-                        if (onQuaternion) {
-                            onQuaternion(quaternion);
+                        // Use ref to get latest callback
+                        if (onQuaternionRef.current) {
+                            onQuaternionRef.current(quaternion);
                         }
                         offset += 20;
                         continue;
@@ -264,8 +288,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                         const message = `M: x=${magnetometer.x.toFixed(2)} y=${magnetometer.y.toFixed(2)} z=${magnetometer.z.toFixed(2)} µT`;
                         addEntry('data', message);
 
-                        if (onMagnetometer) {
-                            onMagnetometer(magnetometer);
+                        // Use ref to get latest callback
+                        if (onMagnetometerRef.current) {
+                            onMagnetometerRef.current(magnetometer);
                         }
                         offset += 16;
                         continue;
@@ -286,8 +311,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                         const message = `A: x=${linearAccel.x.toFixed(2)} y=${linearAccel.y.toFixed(2)} z=${linearAccel.z.toFixed(2)} m/s²`;
                         addEntry('data', message, { linearAccel });
 
-                        if (onLinearAccel) {
-                            onLinearAccel(linearAccel);
+                        // Use ref to get latest callback
+                        if (onLinearAccelRef.current) {
+                            onLinearAccelRef.current(linearAccel);
                         }
                         offset += 16;
                         continue;
@@ -306,7 +332,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         if (offset > 0) {
             incomingBufferRef.current = buffer.slice(offset);
         }
-    }, [addEntry, onQuaternion, onLinearAccel, onMagnetometer]);
+    }, [addEntry]); // Only depend on addEntry, callbacks accessed via refs
 
     const connect = useCallback(async () => {
         // Check if Web Bluetooth is supported
@@ -336,7 +362,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                 characteristicRef.current = null;
                 // Reset buffer on disconnect
                 incomingBufferRef.current = new Uint8Array(0);
-                if (onDisconnect) onDisconnect();
+                if (onDisconnectRef.current) onDisconnectRef.current();
             });
 
             // Connect to GATT server
@@ -404,17 +430,19 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
 
         // Reset buffer on disconnect
         incomingBufferRef.current = new Uint8Array(0);
-        if (onDisconnect) onDisconnect();
-    }, [addEntry, handleNotification, onDisconnect]);
+        if (onDisconnectRef.current) onDisconnectRef.current();
+    }, [addEntry, handleNotification]); // Removed onDisconnect, using ref
 
     const clearEntries = useCallback(() => {
         setEntries([]);
         entryIdRef.current = 0;
+        setPacketCount(0);
     }, []);
 
     return {
         ...state,
         entries,
+        packetCount,
         connect,
         disconnect,
         clearEntries,

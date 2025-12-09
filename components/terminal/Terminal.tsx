@@ -1,6 +1,6 @@
 'use client';
 
-import { Terminal as TerminalIcon, Bluetooth, BluetoothOff, Trash2 } from "lucide-react";
+import { Terminal as TerminalIcon, Bluetooth, BluetoothOff, Trash2, Lock, Unlock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBluetooth, TerminalEntry } from "@/hooks/useBluetooth";
 import { useEffect, useRef } from "react";
@@ -23,14 +23,17 @@ interface TerminalProps {
     onLinearAccel?: (a: { x: number; y: number; z: number }) => void;
     onMagnetometer?: (m: { x: number; y: number; z: number }) => void;
     onDisconnect?: () => void;
+    isPositionLocked?: boolean;
+    onTogglePositionLock?: () => void;
 }
 
-export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDisconnect }: TerminalProps) {
+export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDisconnect, isPositionLocked = false, onTogglePositionLock }: TerminalProps) {
     const {
         isConnected,
         isConnecting,
         deviceName,
         entries,
+        packetCount,
         connect,
         disconnect,
         clearEntries,
@@ -114,6 +117,21 @@ export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDiscon
                     <Trash2 className="w-3.5 h-3.5" />
                     Clear
                 </button>
+
+                {/* Position Lock Toggle */}
+                <button
+                    onClick={onTogglePositionLock}
+                    className={cn(
+                        "flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ml-auto",
+                        isPositionLocked
+                            ? "bg-amber-600/20 border border-amber-500/30 text-amber-400 hover:bg-amber-600/30"
+                            : "bg-zinc-800/50 border border-zinc-700/50 text-zinc-400 hover:bg-zinc-700/50 hover:text-zinc-300"
+                    )}
+                    title={isPositionLocked ? "Position locked (orientation only)" : "Position tracking active"}
+                >
+                    {isPositionLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                    {isPositionLocked ? "Locked" : "Unlocked"}
+                </button>
             </div>
 
             {/* Terminal output */}
@@ -147,7 +165,7 @@ export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDiscon
             {/* Footer with stats */}
             {isConnected && (
                 <div className="px-4 py-2 border-t border-white/5 bg-zinc-900/30 text-xs text-zinc-500 flex items-center justify-between">
-                    <span>Packets: {entries.filter(e => e.type === 'data').length}</span>
+                    <span>Packets: {packetCount}</span>
                     <span className="flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                         Live

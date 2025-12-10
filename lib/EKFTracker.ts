@@ -45,16 +45,43 @@ export class EKFTracker {
     // Heading correction gain (0-1, higher = more magnetometer trust)
     private readonly HEADING_CORRECTION_GAIN = 0.05;
 
-    // ZUPT parameters
-    private readonly ZUPT_ACCEL_THRESHOLD = 0.3; // m/s² - threshold for "stationary"
-    private readonly ZUPT_FRAMES_REQUIRED = 5;   // Consecutive frames to trigger ZUPT
+    // ZUPT parameters - more aggressive to catch stationary periods
+    private readonly ZUPT_ACCEL_THRESHOLD = 0.5; // m/s² - threshold for "stationary"
+    private readonly ZUPT_FRAMES_REQUIRED = 3;   // Consecutive frames to trigger ZUPT (reduced for faster response)
     private stationaryFrameCount = 0;
 
     // Velocity measurement noise for ZUPT (very low = trust ZUPT strongly)
-    private readonly ZUPT_VELOCITY_NOISE = 0.001;
+    private readonly ZUPT_VELOCITY_NOISE = 0.0001;
 
     // Maximum time delta before resetting (e.g., tab inactive)
     private readonly MAX_DT = 1.0;
+
+    // ========== Adaptive High-Pass Filter for Drift Prevention ==========
+    // Uses different cutoff frequencies based on motion state:
+    // - When STATIONARY: fast decay (0.15 Hz) to return to origin
+    // - When MOVING: very slow decay (0.01 Hz) to preserve movement
+
+    // Cutoff when stationary - fast decay to eliminate drift
+    private readonly HPF_CUTOFF_STATIONARY = 0.15;
+
+    // Cutoff when moving - very slow decay to preserve movement
+    private readonly HPF_CUTOFF_MOVING = 0.01;
+
+    // Motion detection threshold (m/s²) - above this we consider "moving"
+    private readonly MOTION_THRESHOLD = 0.8;
+
+    // Smooth transition factor for cutoff (0-1 per frame toward target)
+    private currentHPFCutoff = 0.15;
+    private readonly HPF_TRANSITION_RATE = 0.1;
+
+    // Position gain - scales the filtered output for better visualization
+    private readonly POSITION_GAIN = 8.0;
+
+    // Filtered position output (what we actually return)
+    private filteredPosition = { x: 0, y: 0, z: 0 };
+
+    // Previous raw position for computing deltas
+    private prevRawPosition = { x: 0, y: 0, z: 0 };
 
     constructor() {
         // Initialize state to zeros (at origin, stationary, no bias)
@@ -68,11 +95,11 @@ export class EKFTracker {
         ]);
 
         // Process noise - tune based on sensor characteristics
-        // Higher values = less trust in motion model
+        // Higher values = less trust in motion model, more responsive to measurements
         this.Q = Matrix9.diagonal([
-            0.001, 0.001, 0.001,   // Position process noise
-            0.1, 0.1, 0.1,         // Velocity process noise (accelerometers are noisy)
-            0.0001, 0.0001, 0.0001, // Bias drift (very slow)
+            0.01, 0.01, 0.01,    // Position process noise (increased for responsiveness)
+            0.5, 0.5, 0.5,       // Velocity process noise (high - accelerometers are noisy)
+            0.00001, 0.00001, 0.00001, // Bias drift (very slow, nearly constant)
         ]);
 
         this.lastUpdateTime = performance.now();
@@ -164,6 +191,12 @@ export class EKFTracker {
         if (this.stationaryFrameCount >= this.ZUPT_FRAMES_REQUIRED) {
             this.applyZUPT();
         }
+
+        // Get raw position from EKF state
+        const rawPosition = this.getRawPosition();
+
+        // Apply high-pass filter to prevent drift
+        this.applyHighPassFilter(rawPosition, dt);
 
         return this.getPosition();
     }
@@ -285,13 +318,74 @@ export class EKFTracker {
     }
 
     /**
-     * Get current position estimate
+     * Apply high-pass filter to position to prevent drift
+     * 
+     * The high-pass filter works by:
+     * 1. Computing the position delta (change since last update)
+     * 2. Adding the delta to the filtered position
+     * 3. Decaying the filtered position toward zero over time
+     * 
+     * This allows rapid movements to pass through while slowly
+     * pulling position back to origin to prevent unbounded drift.
      */
-    public getPosition(): { x: number; y: number; z: number } {
+    private applyHighPassFilter(
+        rawPosition: { x: number; y: number; z: number },
+        dt: number
+    ): void {
+        // Compute position delta (new movement)
+        const dx = rawPosition.x - this.prevRawPosition.x;
+        const dy = rawPosition.y - this.prevRawPosition.y;
+        const dz = rawPosition.z - this.prevRawPosition.z;
+
+        // Update previous raw position
+        this.prevRawPosition = { ...rawPosition };
+
+        // Determine target HPF cutoff based on motion magnitude
+        // Use the position delta magnitude as a proxy for motion
+        const deltaMag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const isMoving = deltaMag > 0.001; // Small threshold for position change
+
+        const targetCutoff = isMoving ? this.HPF_CUTOFF_MOVING : this.HPF_CUTOFF_STATIONARY;
+
+        // Smoothly transition cutoff frequency
+        this.currentHPFCutoff += this.HPF_TRANSITION_RATE * (targetCutoff - this.currentHPFCutoff);
+
+        // Calculate decay factor: α = exp(-ω_c * dt) where ω_c = 2π * f_c
+        // For stability, clamp dt to reasonable range
+        const clampedDt = Math.min(dt, 0.1);
+        const omega_c = 2 * Math.PI * this.currentHPFCutoff;
+        const alpha = Math.exp(-omega_c * clampedDt);
+
+        // High-pass filter:
+        // filtered[n] = α * (filtered[n-1] + delta)
+        // This adds new movement, then decays toward zero
+        this.filteredPosition = {
+            x: alpha * (this.filteredPosition.x + dx),
+            y: alpha * (this.filteredPosition.y + dy),
+            z: alpha * (this.filteredPosition.z + dz),
+        };
+    }
+
+    /**
+     * Get raw (unfiltered) position from EKF state
+     */
+    private getRawPosition(): { x: number; y: number; z: number } {
         return {
             x: this.state.get(0),
             y: this.state.get(1),
             z: this.state.get(2),
+        };
+    }
+
+    /**
+     * Get current position estimate (high-pass filtered to prevent drift)
+     * Position is scaled by POSITION_GAIN for better visualization
+     */
+    public getPosition(): { x: number; y: number; z: number } {
+        return {
+            x: this.filteredPosition.x * this.POSITION_GAIN,
+            y: this.filteredPosition.y * this.POSITION_GAIN,
+            z: this.filteredPosition.z * this.POSITION_GAIN,
         };
     }
 
@@ -320,6 +414,11 @@ export class EKFTracker {
         this.lastQuaternion = null;
         this.referenceHeading = null;
         this.lastUpdateTime = performance.now();
+
+        // Reset high-pass filter state
+        this.filteredPosition = { x: 0, y: 0, z: 0 };
+        this.prevRawPosition = { x: 0, y: 0, z: 0 };
+        this.currentHPFCutoff = this.HPF_CUTOFF_STATIONARY;
     }
 
     // ========== Helper methods ==========

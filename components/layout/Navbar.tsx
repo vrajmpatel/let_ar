@@ -1,4 +1,4 @@
-import { Hand } from "lucide-react";
+import { Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Navbar() {
@@ -9,10 +9,10 @@ export function Navbar() {
             )}>
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-blue-500/10 rounded-lg border border-blue-500/20">
-                        <Hand className="w-5 h-5 text-blue-500" />
+                        <Maximize2 className="w-5 h-5 text-blue-500" />
                     </div>
                     <h1 className="text-lg font-medium tracking-tight bg-gradient-to-br from-white to-white/60 bg-clip-text text-transparent">
-                        Hand Control
+                        Low-Cost Motion Capture
                     </h1>
                 </div>
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import type { IMURecordingV1 } from '@/lib/recording';
 
 // Nordic UART Service UUIDs
 const UART_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
@@ -9,10 +10,12 @@ const UART_TX_CHARACTERISTIC_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // T
 export interface TerminalEntry {
     id: number;
     timestamp: Date;
+    tMs?: number;
     type: 'system' | 'data' | 'error';
     message: string;
     quaternion?: { w: number; x: number; y: number; z: number };
     linearAccel?: { x: number; y: number; z: number };
+    magnetometer?: { x: number; y: number; z: number };
 }
 
 export interface BluetoothState {
@@ -187,6 +190,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
     // Persistent buffer to handle fragmented BLE packets
     const incomingBufferRef = useRef<Uint8Array>(new Uint8Array(0));
 
+    const recordingStartPerfRef = useRef<number | null>(null);
+    const recordingRef = useRef<IMURecordingV1 | null>(null);
+
     // Use refs for callbacks to avoid stale closures in notification handler
     const onQuaternionRef = useRef(onQuaternion);
     const onLinearAccelRef = useRef(onLinearAccel);
@@ -202,14 +208,19 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
     }, [onQuaternion, onLinearAccel, onMagnetometer, onDisconnect]);
 
 
-    const addEntry = useCallback((type: TerminalEntry['type'], message: string, data?: { quaternion?: TerminalEntry['quaternion'], linearAccel?: TerminalEntry['linearAccel'] }) => {
+    const addEntry = useCallback((type: TerminalEntry['type'], message: string, data?: { quaternion?: TerminalEntry['quaternion'], linearAccel?: TerminalEntry['linearAccel'], magnetometer?: TerminalEntry['magnetometer'] }) => {
+        const now = new Date();
+        const startPerf = recordingStartPerfRef.current;
+        const tMs = startPerf !== null ? performance.now() - startPerf : undefined;
         const entry: TerminalEntry = {
             id: entryIdRef.current++,
-            timestamp: new Date(),
+            timestamp: now,
+            tMs,
             type,
             message,
             quaternion: data?.quaternion,
             linearAccel: data?.linearAccel,
+            magnetometer: data?.magnetometer,
         };
         setEntries(prev => {
             // Keep only last 100 entries to prevent memory issues
@@ -223,6 +234,18 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         // Increment packet count for data entries
         if (type === 'data') {
             setPacketCount(prev => prev + 1);
+        }
+
+        if (recordingRef.current && typeof tMs === 'number') {
+            recordingRef.current.events.push({
+                tMs,
+                timestamp: now.toISOString(),
+                type,
+                message,
+                quaternion: data?.quaternion,
+                linearAccel: data?.linearAccel,
+                magnetometer: data?.magnetometer,
+            });
         }
     }, []);
 
@@ -286,7 +309,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
 
                     if (magnetometer) {
                         const message = `M: x=${magnetometer.x.toFixed(2)} y=${magnetometer.y.toFixed(2)} z=${magnetometer.z.toFixed(2)} µT`;
-                        addEntry('data', message);
+                        addEntry('data', message, { magnetometer });
 
                         // Use ref to get latest callback
                         if (onMagnetometerRef.current) {
@@ -342,6 +365,17 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
             return;
         }
 
+        recordingStartPerfRef.current = performance.now();
+        recordingRef.current = {
+            schemaVersion: 1,
+            recordedAt: new Date().toISOString(),
+            deviceName: null,
+            connectedAt: null,
+            disconnectedAt: null,
+            calibration: null,
+            events: [],
+        };
+
         setState(prev => ({ ...prev, isConnecting: true, error: null }));
         addEntry('system', 'Scanning for QuatStream device...');
 
@@ -359,6 +393,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
             device.addEventListener('gattserverdisconnected', () => {
                 setState(prev => ({ ...prev, isConnected: false, deviceName: null }));
                 addEntry('system', 'Device disconnected.');
+                if (recordingRef.current) {
+                    recordingRef.current.disconnectedAt = new Date().toISOString();
+                }
                 characteristicRef.current = null;
                 // Reset buffer on disconnect
                 incomingBufferRef.current = new Uint8Array(0);
@@ -392,6 +429,11 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                 deviceName: device.name || 'QuatStream',
                 error: null,
             });
+
+            if (recordingRef.current) {
+                recordingRef.current.deviceName = device.name || 'QuatStream';
+                recordingRef.current.connectedAt = new Date().toISOString();
+            }
 
             addEntry('system', `Connected to ${device.name}! Receiving quaternion, magnetometer, and acceleration data...`);
 
@@ -427,6 +469,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         });
 
         addEntry('system', 'Disconnected from device.');
+        if (recordingRef.current) {
+            recordingRef.current.disconnectedAt = new Date().toISOString();
+        }
 
         // Reset buffer on disconnect
         incomingBufferRef.current = new Uint8Array(0);
@@ -439,6 +484,15 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         setPacketCount(0);
     }, []);
 
+    const exportRecording = useCallback(() => {
+        const rec = recordingRef.current;
+        if (!rec) return null;
+        if (typeof structuredClone === 'function') {
+            return structuredClone(rec);
+        }
+        return JSON.parse(JSON.stringify(rec)) as IMURecordingV1;
+    }, []);
+
     return {
         ...state,
         entries,
@@ -446,5 +500,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         connect,
         disconnect,
         clearEntries,
+        addEntry,
+        exportRecording,
     };
 }

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -20,6 +20,8 @@ interface HandModelProps {
     scale?: number | [number, number, number];
     quaternion?: Quaternion | null;
     linearAccel?: LinearAccel | null;
+    isCalibrated?: boolean;
+    mode?: "live" | "replay";
 }
 
 function Finger({ position, scale }: { position: [number, number, number], scale: [number, number, number] }) {
@@ -50,28 +52,34 @@ function Joint({ position }: { position: [number, number, number] }) {
     );
 }
 
-export function HandModel({ quaternion, linearAccel, ...props }: HandModelProps) {
-    const groupRef = useRef<THREE.Group>(null);
+const CALIBRATED_NEUTRAL_ROTATION = new THREE.Quaternion(Math.SQRT1_2, Math.SQRT1_2, 0, 0);
+
+export const HandModel = forwardRef<THREE.Group, HandModelProps>(function HandModel({ quaternion, linearAccel: _linearAccel, isCalibrated = false, mode = "live", ...props }, ref) {
+    const groupRef = useRef<THREE.Group>(null!);
     const targetQuaternion = useRef(new THREE.Quaternion());
     const hasQuaternion = quaternion !== null && quaternion !== undefined;
 
+    useImperativeHandle(ref, () => groupRef.current);
+
     // Update target quaternion when prop changes
     useEffect(() => {
-        if (quaternion) {
+        if (mode === "live" && quaternion) {
             // Convert from sensor quaternion to Three.js quaternion
             // Note: You may need to adjust the axis mapping depending on sensor orientation
-            targetQuaternion.current.set(
-                quaternion.x,
-                quaternion.y,
-                quaternion.z,
-                quaternion.w
-            );
+            const sensorQ = new THREE.Quaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w).normalize();
+            if (isCalibrated) {
+                sensorQ.multiply(CALIBRATED_NEUTRAL_ROTATION);
+            }
+            targetQuaternion.current.copy(sensorQ);
         }
-    }, [quaternion]);
+    }, [mode, quaternion, isCalibrated]);
 
 
 
     useFrame((state) => {
+        if (mode === "replay") {
+            return;
+        }
         if (groupRef.current) {
             if (hasQuaternion) {
                 // Smoothly interpolate to the target quaternion from the sensor
@@ -143,4 +151,4 @@ export function HandModel({ quaternion, linearAccel, ...props }: HandModelProps)
 
         </group>
     );
-}
+});

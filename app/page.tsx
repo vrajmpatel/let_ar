@@ -7,12 +7,17 @@ import { SceneContainer } from "@/components/scene/SceneContainer";
 import { Terminal } from "@/components/terminal/Terminal";
 import { Quaternion, LinearAccel } from "@/components/scene/HandModel";
 import { EKFTracker } from "@/lib/EKFTracker";
+import { useCalibration } from "@/hooks/useCalibration";
+import type { ReplaySessionV1 } from "@/lib/replay";
 
 export default function Home() {
   const [quaternion, setQuaternion] = useState<Quaternion | null>(null);
   const [linearAccel, setLinearAccel] = useState<LinearAccel | null>(null);
   const [position, setPosition] = useState<{ x: number, y: number, z: number }>({ x: 0, y: 0, z: 0 });
-  const [isPositionLocked, setIsPositionLocked] = useState(false);
+  const [isPositionLocked, setIsPositionLocked] = useState(true);
+  const [replay, setReplay] = useState<ReplaySessionV1 | null>(null);
+  const [isReplaying, setIsReplaying] = useState(false);
+  const [replayProgress, setReplayProgress] = useState<{ currentFrame: number; totalFrames: number } | null>(null);
 
   const ekfTrackerRef = useRef<EKFTracker | null>(null);
   const lastQuaternionRef = useRef<Quaternion | null>(null);
@@ -22,29 +27,61 @@ export default function Home() {
     ekfTrackerRef.current = new EKFTracker();
   }, []);
 
+  // Initialize calibration with terminal message callback
+  const {
+    isCalibrating,
+    hasCalibration,
+    currentStep,
+    startCalibration,
+    cancelCalibration,
+    clearCalibration,
+    addAccelSample,
+    transformAcceleration,
+    getStepProgress,
+  } = useCalibration({
+    onCalibrationMessage: useCallback((message: string, type: 'system' | 'data' | 'error') => {
+      // Calibration messages are logged via useCalibration's internal callbacks
+      // The terminal will display them through the useBluetooth entries
+      console.log(`[Calibration ${type}]:`, message);
+    }, []),
+  });
+
   const handleQuaternion = useCallback((q: Quaternion) => {
+    if (isReplaying) return;
     setQuaternion(q);
     lastQuaternionRef.current = q;
-  }, []);
+  }, [isReplaying]);
 
   const handleLinearAccel = useCallback((a: LinearAccel) => {
-    setLinearAccel(a);
+    // If calibrating, feed samples to calibration manager
+    if (isCalibrating) {
+      addAccelSample(a);
+      return; // Don't update position during calibration
+    }
 
-    // Skip position updates when locked (orientation still updates)
+    if (isReplaying) {
+      return;
+    }
+
+    // Skip all processing when locked (record-only mode)
     if (isPositionLocked) {
       return;
     }
 
+    // Apply calibration transform if available
+    const calibratedAccel = transformAcceleration(a);
+    setLinearAccel(calibratedAccel);
+
     // Update EKF tracker if we have orientation data
     if (ekfTrackerRef.current && lastQuaternionRef.current) {
-      const newPos = ekfTrackerRef.current.predict(a, lastQuaternionRef.current);
+      const newPos = ekfTrackerRef.current.predict(calibratedAccel, lastQuaternionRef.current);
       setPosition(newPos);
     }
-  }, [isPositionLocked]);
+  }, [isPositionLocked, isReplaying, isCalibrating, addAccelSample, transformAcceleration]);
 
   const handleMagnetometer = useCallback((m: { x: number; y: number; z: number }) => {
-    // Skip magnetometer updates when locked
-    if (isPositionLocked) {
+    // Skip magnetometer updates when locked or calibrating
+    if (isReplaying || isPositionLocked || isCalibrating) {
       return;
     }
 
@@ -52,25 +89,68 @@ export default function Home() {
     if (ekfTrackerRef.current) {
       ekfTrackerRef.current.updateMagnetometer(m);
     }
-  }, [isPositionLocked]);
+  }, [isReplaying, isPositionLocked, isCalibrating]);
 
   const handleDisconnect = useCallback(() => {
     if (ekfTrackerRef.current) {
       ekfTrackerRef.current.reset();
       setPosition({ x: 0, y: 0, z: 0 });
     }
-  }, []);
+    // Cancel any in-progress calibration on disconnect
+    if (isCalibrating) {
+      cancelCalibration();
+    }
+    setIsReplaying(false);
+    setReplay(null);
+  }, [isCalibrating, cancelCalibration]);
 
   const handleTogglePositionLock = useCallback(() => {
     setIsPositionLocked(prev => !prev);
   }, []);
 
+  const handleReplayLoaded = useCallback((session: ReplaySessionV1) => {
+    setReplay(session);
+    setIsReplaying(true);
+    setReplayProgress({ currentFrame: 1, totalFrames: session.frames.length });
+    setQuaternion(null);
+    setLinearAccel(null);
+    setPosition({ x: 0, y: 0, z: 0 });
+    if (ekfTrackerRef.current) {
+      ekfTrackerRef.current.reset();
+    }
+  }, []);
+
+  const handleStopReplay = useCallback(() => {
+    setIsReplaying(false);
+    setReplay(null);
+    setReplayProgress(null);
+    setQuaternion(null);
+    setLinearAccel(null);
+    setPosition({ x: 0, y: 0, z: 0 });
+  }, []);
+
+  // Get calibration progress for display
+  const calibrationProgress = getStepProgress();
+
   return (
     <main className="flex h-full w-full bg-background text-foreground overflow-hidden">
       {/* 3D Viewport - Takes up majority of space */}
       <section className="relative flex-1 h-full min-w-0">
-        <Navbar />
-        <SceneContainer quaternion={quaternion} linearAccel={linearAccel} position={position} />
+        <Navbar
+          playback={{
+            isActive: isReplaying,
+            currentFrame: replayProgress?.currentFrame ?? 0,
+            totalFrames: replayProgress?.totalFrames ?? 0,
+          }}
+        />
+        <SceneContainer
+          quaternion={quaternion}
+          linearAccel={linearAccel}
+          position={position}
+          isCalibrated={hasCalibration}
+          replay={replay && isReplaying ? { frames: replay.frames, isPlaying: true, onEnded: handleStopReplay } : null}
+          onReplayProgress={setReplayProgress}
+        />
         <Footer />
       </section>
 
@@ -83,6 +163,15 @@ export default function Home() {
           onDisconnect={handleDisconnect}
           isPositionLocked={isPositionLocked}
           onTogglePositionLock={handleTogglePositionLock}
+          isCalibrating={isCalibrating}
+          hasCalibration={hasCalibration}
+          onStartCalibration={startCalibration}
+          onCancelCalibration={cancelCalibration}
+          onClearCalibration={clearCalibration}
+          calibrationProgress={calibrationProgress}
+          onReplayLoaded={handleReplayLoaded}
+          isReplaying={isReplaying}
+          onStopReplay={handleStopReplay}
         />
       </aside>
     </main>

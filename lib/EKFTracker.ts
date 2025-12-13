@@ -117,6 +117,24 @@ export class EKFTracker {
         const dt = (now - this.lastUpdateTime) / 1000; // seconds
         this.lastUpdateTime = now;
 
+        return this.predictInternal(accel, quat, dt);
+    }
+
+    public predictWithDt(
+        accel: { x: number; y: number; z: number },
+        quat: { w: number; x: number; y: number; z: number },
+        dt: number
+    ): { x: number; y: number; z: number } {
+        this.lastUpdateTime = this.lastUpdateTime + dt * 1000;
+        return this.predictInternal(accel, quat, dt);
+    }
+
+    private predictInternal(
+        accel: { x: number; y: number; z: number },
+        quat: { w: number; x: number; y: number; z: number },
+        dt: number
+    ): { x: number; y: number; z: number } {
+
         // Store quaternion for magnetometer updates
         this.lastQuaternion = quat;
 

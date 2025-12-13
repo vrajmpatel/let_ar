@@ -1,9 +1,14 @@
 'use client';
 
-import { Terminal as TerminalIcon, Bluetooth, BluetoothOff, Trash2, Lock, Unlock } from "lucide-react";
+import { Terminal as TerminalIcon, Bluetooth, BluetoothOff, Trash2, Lock, Unlock, Crosshair, X, Download, Upload, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBluetooth, TerminalEntry } from "@/hooks/useBluetooth";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { downloadJson } from "@/lib/downloadJson";
+import { CALIBRATION_STORAGE_KEY } from "@/lib/CalibrationManager";
+import { isIMURecordingV1 } from "@/lib/recording";
+import { preprocessRecordingToReplay } from "@/lib/preprocessRecording";
+import type { ReplaySessionV1 } from "@/lib/replay";
 
 function EntryIcon({ type }: { type: TerminalEntry['type'] }) {
     switch (type) {
@@ -25,9 +30,36 @@ interface TerminalProps {
     onDisconnect?: () => void;
     isPositionLocked?: boolean;
     onTogglePositionLock?: () => void;
+    // Calibration props
+    isCalibrating?: boolean;
+    hasCalibration?: boolean;
+    onStartCalibration?: () => void;
+    onCancelCalibration?: () => void;
+    onClearCalibration?: () => void;
+    calibrationProgress?: { current: number; total: number; label: string } | null;
+    onAddEntry?: (type: 'system' | 'data' | 'error', message: string) => void;
+    onReplayLoaded?: (replay: ReplaySessionV1) => void;
+    isReplaying?: boolean;
+    onStopReplay?: () => void;
 }
 
-export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDisconnect, isPositionLocked = false, onTogglePositionLock }: TerminalProps) {
+export function Terminal({
+    onQuaternion,
+    onLinearAccel,
+    onMagnetometer,
+    onDisconnect,
+    isPositionLocked = false,
+    onTogglePositionLock,
+    isCalibrating = false,
+    hasCalibration = false,
+    onStartCalibration,
+    onCancelCalibration,
+    onClearCalibration,
+    calibrationProgress,
+    onReplayLoaded,
+    isReplaying = false,
+    onStopReplay,
+}: TerminalProps) {
     const {
         isConnected,
         isConnecting,
@@ -37,10 +69,73 @@ export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDiscon
         connect,
         disconnect,
         clearEntries,
+        addEntry,
+        exportRecording,
     } = useBluetooth({ onQuaternion, onLinearAccel, onMagnetometer, onDisconnect });
+
+    // Track if we've shown calibration status message (ref avoids setState-in-effect lint)
+    const hasShownCalibrationStatusRef = useRef(false);
+
+    // Show calibration status when connected
+    useEffect(() => {
+        if (isConnected && !hasShownCalibrationStatusRef.current) {
+            if (hasCalibration) {
+                addEntry('system', '✓ Calibration data loaded from storage. Device is ready.');
+            } else {
+                addEntry('system', '⚠ No calibration data found. Click "Calibrate" to align IMU axes.');
+            }
+            hasShownCalibrationStatusRef.current = true;
+        }
+        if (!isConnected) {
+            hasShownCalibrationStatusRef.current = false;
+        }
+    }, [isConnected, hasCalibration, addEntry]);
 
 
     const scrollRef = useRef<HTMLDivElement>(null);
+    const uploadInputRef = useRef<HTMLInputElement>(null);
+
+    const getSafeDeviceName = (name: string | null | undefined) => {
+        const base = (name || "device").trim();
+        return base.length > 0 ? base.replaceAll(/[^\w.-]+/g, "_") : "device";
+    };
+
+    const handleDownload = () => {
+        const recording = exportRecording();
+        if (!recording) {
+            addEntry("error", "No recording available yet. Connect to the device first.");
+            return;
+        }
+
+        let calibration = null;
+        try {
+            const stored = localStorage.getItem(CALIBRATION_STORAGE_KEY);
+            if (stored) calibration = JSON.parse(stored);
+        } catch {
+            calibration = null;
+        }
+
+        const exportData = { ...recording, calibration };
+        const stamp = new Date().toISOString().replaceAll(":", "-");
+        const filename = `imu_recording_${getSafeDeviceName(recording.deviceName || deviceName)}_${stamp}.json`;
+        downloadJson(filename, exportData);
+        addEntry("system", `Downloaded recording (${exportData.events.length} events).`);
+    };
+
+    const handleUploadClick = () => {
+        uploadInputRef.current?.click();
+    };
+
+    const handleUploadFile = async (file: File) => {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as unknown;
+        if (!isIMURecordingV1(parsed)) {
+            throw new Error("Unsupported JSON format (expected schemaVersion=1 recording).");
+        }
+        const replay = preprocessRecordingToReplay(parsed, { sourceFileName: file.name });
+        onReplayLoaded?.(replay);
+        addEntry("system", `Loaded replay from ${file.name} (${replay.frames.length} frames).`);
+    };
 
     // Auto-scroll to bottom when new entries arrive
     useEffect(() => {
@@ -77,7 +172,7 @@ export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDiscon
             </div>
 
             {/* Control buttons */}
-            <div className="flex items-center gap-2 px-4 py-2 border-b border-white/10 bg-zinc-900/50">
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-white/10 bg-zinc-900/50 flex-wrap">
                 {!isConnected ? (
                     <button
                         onClick={connect}
@@ -117,6 +212,97 @@ export function Terminal({ onQuaternion, onLinearAccel, onMagnetometer, onDiscon
                     <Trash2 className="w-3.5 h-3.5" />
                     Clear
                 </button>
+
+                <button
+                    onClick={handleDownload}
+                    className={cn(
+                        "flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                        "bg-zinc-800/50 border border-zinc-700/50 text-zinc-400",
+                        "hover:bg-zinc-700/50 hover:text-zinc-300"
+                    )}
+                    title="Download all recorded events as JSON"
+                >
+                    <Download className="w-3.5 h-3.5" />
+                    Download
+                </button>
+
+                <input
+                    ref={uploadInputRef}
+                    type="file"
+                    accept="application/json"
+                    className="hidden"
+                    onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file) return;
+                        try {
+                            await handleUploadFile(file);
+                        } catch (err) {
+                            const message = err instanceof Error ? err.message : "Failed to load recording JSON.";
+                            addEntry("error", message);
+                        }
+                    }}
+                />
+
+                {!isReplaying ? (
+                    <button
+                        onClick={handleUploadClick}
+                        className={cn(
+                            "flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                            "bg-zinc-800/50 border border-zinc-700/50 text-zinc-400",
+                            "hover:bg-zinc-700/50 hover:text-zinc-300"
+                        )}
+                        title="Upload a recording JSON to replay"
+                    >
+                        <Upload className="w-3.5 h-3.5" />
+                        Upload
+                    </button>
+                ) : (
+                    <button
+                        onClick={onStopReplay}
+                        className={cn(
+                            "flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                            "bg-amber-600/20 border border-amber-500/30 text-amber-400",
+                            "hover:bg-amber-600/30 hover:border-amber-500/50"
+                        )}
+                        title="Stop replay and return to live view"
+                    >
+                        <Square className="w-3.5 h-3.5" />
+                        Stop
+                    </button>
+                )}
+
+                {/* Calibration Button */}
+                {isConnected && (
+                    isCalibrating ? (
+                        <button
+                            onClick={onCancelCalibration}
+                            className={cn(
+                                "flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                                "bg-orange-600/20 border border-orange-500/30 text-orange-400",
+                                "hover:bg-orange-600/30 hover:border-orange-500/50 animate-pulse"
+                            )}
+                            title={calibrationProgress ? `Step ${calibrationProgress.current}/${calibrationProgress.total}: ${calibrationProgress.label}` : "Calibrating..."}
+                        >
+                            <X className="w-3.5 h-3.5" />
+                            Cancel ({calibrationProgress?.label || "..."})
+                        </button>
+                    ) : (
+                        <button
+                            onClick={onStartCalibration}
+                            className={cn(
+                                "flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                                hasCalibration
+                                    ? "bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/30"
+                                    : "bg-purple-600/20 border border-purple-500/30 text-purple-400 hover:bg-purple-600/30"
+                            )}
+                            title={hasCalibration ? "Recalibrate device" : "Calibrate device axes"}
+                        >
+                            <Crosshair className="w-3.5 h-3.5" />
+                            {hasCalibration ? "Recalibrate" : "Calibrate"}
+                        </button>
+                    )
+                )}
 
                 {/* Position Lock Toggle */}
                 <button

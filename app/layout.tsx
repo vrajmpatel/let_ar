@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "3D Hand Control",
-  description: "A premium 3D hand visualization application",
+  title: "Low-Cost Motion Capture",
+  description: "A premium low-cost motion capture visualization application",
 };
 
 export default function RootLayout({

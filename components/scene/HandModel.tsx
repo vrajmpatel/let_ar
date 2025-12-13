@@ -9,10 +9,17 @@ export interface Quaternion {
     z: number;
 }
 
+export interface LinearAccel {
+    x: number;
+    y: number;
+    z: number;
+}
+
 interface HandModelProps {
     position?: [number, number, number];
     scale?: number | [number, number, number];
     quaternion?: Quaternion | null;
+    linearAccel?: LinearAccel | null;
 }
 
 function Finger({ position, scale }: { position: [number, number, number], scale: [number, number, number] }) {
@@ -43,7 +50,7 @@ function Joint({ position }: { position: [number, number, number] }) {
     );
 }
 
-export function HandModel({ quaternion, ...props }: HandModelProps) {
+export function HandModel({ quaternion, linearAccel, ...props }: HandModelProps) {
     const groupRef = useRef<THREE.Group>(null);
     const targetQuaternion = useRef(new THREE.Quaternion());
     const hasQuaternion = quaternion !== null && quaternion !== undefined;
@@ -61,6 +68,8 @@ export function HandModel({ quaternion, ...props }: HandModelProps) {
             );
         }
     }, [quaternion]);
+
+
 
     useFrame((state) => {
         if (groupRef.current) {

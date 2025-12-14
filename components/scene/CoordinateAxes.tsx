@@ -80,20 +80,19 @@ function AxisArrow({ direction, color, label }: AxisArrowProps) {
 }
 
 /**
- * Inner UCS gizmo that syncs with the camera quaternion
+ * Inner UCS gizmo that syncs with the hand quaternion
  */
-function UCSGizmoInner({ 
-    cameraQuatRef 
-}: { 
-    cameraQuatRef: React.MutableRefObject<THREE.Quaternion> 
+function UCSGizmoInner({
+    handQuatRef
+}: {
+    handQuatRef: React.MutableRefObject<THREE.Quaternion>
 }) {
     const gizmoGroupRef = useRef<THREE.Group>(null);
 
     useFrame(() => {
         if (gizmoGroupRef.current) {
-            // Apply inverted camera rotation to show world axes relative to view
-            const invQuat = cameraQuatRef.current.clone().invert();
-            gizmoGroupRef.current.quaternion.copy(invQuat);
+            // Apply hand rotation directly to show the hand's current orientation
+            gizmoGroupRef.current.quaternion.copy(handQuatRef.current);
         }
     });
 
@@ -149,13 +148,13 @@ function UCSGizmoInner({
 /**
  * Component to place inside the main Canvas that broadcasts camera quaternion
  */
-export function UCSCameraBridge({ 
-    quatRef 
-}: { 
+export function UCSCameraBridge({
+    quatRef
+}: {
     quatRef: React.MutableRefObject<THREE.Quaternion>
 }) {
     const { camera } = useThree();
-    
+
     useFrame(() => {
         quatRef.current.copy(camera.quaternion);
     });
@@ -166,22 +165,22 @@ export function UCSCameraBridge({
 /**
  * Standalone UCS gizmo overlay with its own canvas
  */
-export function UCSGizmoOverlay({ 
-    cameraQuatRef 
-}: { 
-    cameraQuatRef: React.MutableRefObject<THREE.Quaternion> 
+export function UCSGizmoOverlay({
+    handQuatRef
+}: {
+    handQuatRef: React.MutableRefObject<THREE.Quaternion>
 }) {
     return (
-        <div 
+        <div
             className="absolute bottom-4 right-4 w-[140px] h-[140px] pointer-events-none z-10"
-            style={{ 
+            style={{
                 background: 'radial-gradient(circle at center, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.25) 60%, transparent 100%)',
                 borderRadius: '12px',
                 border: '1px solid rgba(255,255,255,0.1)'
             }}
         >
             <Canvas
-                camera={{ 
+                camera={{
                     position: [0, 0, 2.5],
                     fov: 50,
                     near: 0.1,
@@ -191,7 +190,7 @@ export function UCSGizmoOverlay({
                 gl={{ antialias: true, alpha: true }}
                 frameloop="always"
             >
-                <UCSGizmoInner cameraQuatRef={cameraQuatRef} />
+                <UCSGizmoInner handQuatRef={handQuatRef} />
             </Canvas>
         </div>
     );
@@ -208,7 +207,7 @@ export function OriginMarker() {
 
     useFrame((state) => {
         pulseRef.current = Math.sin(state.clock.elapsedTime * 2) * 0.5 + 0.5;
-        
+
         if (ringRef.current) {
             const scale = 1 + pulseRef.current * 0.15;
             ringRef.current.scale.set(scale, scale, scale);

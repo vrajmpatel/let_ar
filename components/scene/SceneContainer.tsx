@@ -3,7 +3,7 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Environment, OrbitControls } from "@react-three/drei";
 import { HandModel, Quaternion, LinearAccel } from "./HandModel";
-import { OriginMarker, UCSCameraBridge, UCSGizmoOverlay } from "./CoordinateAxes";
+import { OriginMarker, UCSGizmoOverlay } from "./CoordinateAxes";
 import { Suspense, useRef, useEffect } from "react";
 import * as THREE from "three";
 import type { ReplayFrameV1 } from "@/lib/replay";
@@ -243,8 +243,8 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
     const handRef = useRef<THREE.Group>(null!);
     const replayHandPosRef = useRef({ x: 0, y: 0, z: 0 });
 
-    // Ref to share camera quaternion with UCS overlay
-    const cameraQuatRef = useRef(new THREE.Quaternion());
+    // Ref to share hand quaternion with UCS overlay
+    const handQuatRef = useRef(new THREE.Quaternion());
 
     return (
         <div className="w-full h-full bg-gradient-to-b from-zinc-900 to-black relative">
@@ -254,6 +254,7 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                 camera={{ position: [0, 2, 5], fov: 50 }}
                 dpr={[1, 2]}
                 gl={{ antialias: true, alpha: true }}
+                frameloop="always"
             >
                 <Suspense fallback={null}>
                     <ambientLight intensity={0.5} />
@@ -270,8 +271,6 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                     />
                     <Environment preset="city" />
 
-                    {/* Bridge to sync camera quaternion with UCS overlay */}
-                    <UCSCameraBridge quatRef={cameraQuatRef} />
 
                     {/* Adaptive camera that automatically zooms to keep hand visible */}
                     <AdaptiveCamera
@@ -305,12 +304,15 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                         linearAccel={linearAccel}
                         isCalibrated={!replay?.isPlaying && Boolean(isCalibrated)}
                         mode={replay?.isPlaying ? "replay" : "live"}
+                        onQuaternionUpdate={(q: THREE.Quaternion) => {
+                            handQuatRef.current.copy(q);
+                        }}
                     />
                 </Suspense>
             </Canvas>
 
             {/* UCS Gizmo Overlay - separate canvas in bottom-right corner */}
-            <UCSGizmoOverlay cameraQuatRef={cameraQuatRef} />
+            <UCSGizmoOverlay handQuatRef={handQuatRef} />
         </div>
     );
 }

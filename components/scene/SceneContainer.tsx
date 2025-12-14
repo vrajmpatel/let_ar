@@ -242,7 +242,7 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
     const handPos = position || { x: 0, y: 0, z: 0 };
     const handRef = useRef<THREE.Group>(null!);
     const replayHandPosRef = useRef({ x: 0, y: 0, z: 0 });
-    
+
     // Ref to share camera quaternion with UCS overlay
     const cameraQuatRef = useRef(new THREE.Quaternion());
 
@@ -263,8 +263,8 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                     <OrbitControls
                         ref={orbitControlsRef}
                         enablePan={false}
-                        minPolarAngle={Math.PI / 4}
-                        maxPolarAngle={Math.PI / 1.5}
+                        minPolarAngle={0}
+                        maxPolarAngle={Math.PI}
                         minDistance={3}
                         maxDistance={25}
                     />

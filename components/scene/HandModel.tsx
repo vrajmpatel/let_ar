@@ -22,6 +22,7 @@ interface HandModelProps {
     linearAccel?: LinearAccel | null;
     isCalibrated?: boolean;
     mode?: "live" | "replay";
+    onQuaternionUpdate?: (quaternion: THREE.Quaternion) => void;
 }
 
 function Finger({ position, scale }: { position: [number, number, number], scale: [number, number, number] }) {
@@ -54,7 +55,7 @@ function Joint({ position }: { position: [number, number, number] }) {
 
 const CALIBRATED_NEUTRAL_ROTATION = new THREE.Quaternion(Math.SQRT1_2, Math.SQRT1_2, 0, 0);
 
-export const HandModel = forwardRef<THREE.Group, HandModelProps>(function HandModel({ quaternion, linearAccel: _linearAccel, isCalibrated = false, mode = "live", ...props }, ref) {
+export const HandModel = forwardRef<THREE.Group, HandModelProps>(function HandModel({ quaternion, linearAccel: _linearAccel, isCalibrated = false, mode = "live", onQuaternionUpdate, ...props }, ref) {
     const groupRef = useRef<THREE.Group>(null!);
     const targetQuaternion = useRef(new THREE.Quaternion());
     const hasQuaternion = quaternion !== null && quaternion !== undefined;
@@ -78,12 +79,20 @@ export const HandModel = forwardRef<THREE.Group, HandModelProps>(function HandMo
 
     useFrame((state) => {
         if (mode === "replay") {
+            // In replay mode, notify parent of current quaternion
+            if (groupRef.current && onQuaternionUpdate) {
+                onQuaternionUpdate(groupRef.current.quaternion);
+            }
             return;
         }
         if (groupRef.current) {
             if (hasQuaternion) {
                 // Smoothly interpolate to the target quaternion from the sensor
                 groupRef.current.quaternion.slerp(targetQuaternion.current, 0.15);
+                // Notify parent of current quaternion
+                if (onQuaternionUpdate) {
+                    onQuaternionUpdate(groupRef.current.quaternion);
+                }
             } else {
                 // Gentle floating animation when no quaternion data
                 groupRef.current.position.y = Math.sin(state.clock.elapsedTime * 0.5) * 0.1;

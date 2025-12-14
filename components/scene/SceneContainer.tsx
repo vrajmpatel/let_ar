@@ -3,7 +3,7 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Environment, OrbitControls } from "@react-three/drei";
 import { HandModel, Quaternion, LinearAccel } from "./HandModel";
-import { CoordinateAxes } from "./CoordinateAxes";
+import { OriginMarker, UCSGizmoOverlay } from "./CoordinateAxes";
 import { Suspense, useRef, useEffect } from "react";
 import * as THREE from "three";
 import type { ReplayFrameV1 } from "@/lib/replay";
@@ -36,7 +36,7 @@ interface AdaptiveCameraProps {
  * Monitors the hand's position and smoothly zooms out when the hand approaches viewport edges.
  */
 function AdaptiveCamera({ handPosition, handPositionRef, orbitControlsRef }: AdaptiveCameraProps) {
-    const { camera, gl } = useThree();
+    const { camera } = useThree();
     const targetDistance = useRef(5);
     const currentDistance = useRef(5);
 
@@ -243,6 +243,9 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
     const handRef = useRef<THREE.Group>(null!);
     const replayHandPosRef = useRef({ x: 0, y: 0, z: 0 });
 
+    // Ref to share hand quaternion with UCS overlay
+    const handQuatRef = useRef(new THREE.Quaternion());
+
     return (
         <div className="w-full h-full bg-gradient-to-b from-zinc-900 to-black relative">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-500/5 via-transparent to-transparent opacity-40" />
@@ -251,6 +254,7 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                 camera={{ position: [0, 2, 5], fov: 50 }}
                 dpr={[1, 2]}
                 gl={{ antialias: true, alpha: true }}
+                frameloop="always"
             >
                 <Suspense fallback={null}>
                     <ambientLight intensity={0.5} />
@@ -260,12 +264,13 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                     <OrbitControls
                         ref={orbitControlsRef}
                         enablePan={false}
-                        minPolarAngle={Math.PI / 4}
-                        maxPolarAngle={Math.PI / 1.5}
+                        minPolarAngle={0}
+                        maxPolarAngle={Math.PI}
                         minDistance={3}
                         maxDistance={25}
                     />
                     <Environment preset="city" />
+
 
                     {/* Adaptive camera that automatically zooms to keep hand visible */}
                     <AdaptiveCamera
@@ -288,6 +293,9 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                         />
                     )}
 
+                    {/* Origin marker at base position */}
+                    <OriginMarker />
+
                     <HandModel
                         ref={handRef}
                         position={position ? [position.x, position.y, position.z] : [0, 0, 0]}
@@ -296,12 +304,15 @@ export function SceneContainer({ quaternion, linearAccel, position, replay, onRe
                         linearAccel={linearAccel}
                         isCalibrated={!replay?.isPlaying && Boolean(isCalibrated)}
                         mode={replay?.isPlaying ? "replay" : "live"}
+                        onQuaternionUpdate={(q: THREE.Quaternion) => {
+                            handQuatRef.current.copy(q);
+                        }}
                     />
-
-                    {/* User Coordinate System Legend - bottom left corner */}
-                    <CoordinateAxes />
                 </Suspense>
             </Canvas>
+
+            {/* UCS Gizmo Overlay - separate canvas in bottom-right corner */}
+            <UCSGizmoOverlay handQuatRef={handQuatRef} />
         </div>
     );
 }

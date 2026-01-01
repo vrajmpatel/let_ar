@@ -27,6 +27,8 @@ interface TerminalProps {
     onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
     onLinearAccel?: (a: { x: number; y: number; z: number }) => void;
     onMagnetometer?: (m: { x: number; y: number; z: number }) => void;
+    onBattery?: (b: { percent: number; milliVolts: number }) => void;
+    onConnect?: () => void;
     onDisconnect?: () => void;
     isPositionLocked?: boolean;
     onTogglePositionLock?: () => void;
@@ -47,6 +49,8 @@ export function Terminal({
     onQuaternion,
     onLinearAccel,
     onMagnetometer,
+    onBattery,
+    onConnect,
     onDisconnect,
     isPositionLocked = false,
     onTogglePositionLock,
@@ -71,7 +75,14 @@ export function Terminal({
         clearEntries,
         addEntry,
         exportRecording,
-    } = useBluetooth({ onQuaternion, onLinearAccel, onMagnetometer, onDisconnect });
+    } = useBluetooth({ onQuaternion, onLinearAccel, onMagnetometer, onBattery, onDisconnect });
+
+    // Notify parent when connected
+    useEffect(() => {
+        if (isConnected && onConnect) {
+            onConnect();
+        }
+    }, [isConnected, onConnect]);
 
     // Track if we've shown calibration status message (ref avoids setState-in-effect lint)
     const hasShownCalibrationStatusRef = useRef(false);
@@ -154,7 +165,7 @@ export function Terminal({
                 <div className="flex items-center gap-3">
                     <TerminalIcon className="w-4 h-4 text-muted-foreground" />
                     <span className="text-sm font-medium text-muted-foreground tracking-tight">
-                        Terminal Output
+                        Serial Output
                     </span>
                 </div>
 

@@ -1,15 +1,39 @@
-import { Maximize2, Play } from "lucide-react";
+import { Maximize2, Play, Battery, BatteryLow, BatteryMedium, BatteryFull, BatteryWarning } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+function getBatteryIcon(percent: number | null) {
+    if (percent === null) return Battery;
+    if (percent <= 10) return BatteryWarning;
+    if (percent <= 25) return BatteryLow;
+    if (percent <= 60) return BatteryMedium;
+    return BatteryFull;
+}
+
+function getBatteryColor(percent: number | null) {
+    if (percent === null) return "text-zinc-500";
+    if (percent <= 10) return "text-red-400";
+    if (percent <= 25) return "text-amber-400";
+    return "text-emerald-400";
+}
 
 export function Navbar({
     playback,
+    battery,
+    isConnected = false,
 }: {
     playback?: {
         isActive: boolean;
         currentFrame: number;
         totalFrames: number;
     };
+    battery?: {
+        percent: number;
+        milliVolts: number;
+    } | null;
+    isConnected?: boolean;
 }) {
+    const BatteryIcon = getBatteryIcon(battery?.percent ?? null);
+    const batteryColor = getBatteryColor(battery?.percent ?? null);
     const playbackIsAvailable = (playback?.totalFrames ?? 0) > 0;
     const playbackIsActive = playbackIsAvailable && Boolean(playback?.isActive);
     const playbackText = playbackIsAvailable
@@ -51,6 +75,19 @@ export function Navbar({
                             Playback {playbackText}
                         </span>
                     </div>
+
+                    {/* Battery indicator - only show when connected */}
+                    {isConnected && battery && (
+                        <div
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-800/50 border border-zinc-700/50"
+                            title={`Battery: ${battery.percent}% (${(battery.milliVolts / 1000).toFixed(2)}V)`}
+                        >
+                            <BatteryIcon className={cn("w-4 h-4", batteryColor)} />
+                            <span className={cn("text-xs font-mono", batteryColor)}>
+                                {battery.percent}%
+                            </span>
+                        </div>
+                    )}
 
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/5 border border-green-500/10">
                         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />

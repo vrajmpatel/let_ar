@@ -159,15 +159,56 @@ function parseLinearAccelPacket(data: DataView): { x: number; y: number; z: numb
     return { x, y, z };
 }
 
+/**
+ * Parse a 6-byte battery packet from the QuatStream device
+ * Packet format:
+ *   Byte 0:     '!'  (start marker)
+ *   Byte 1:     'B'  (battery identifier)
+ *   Byte 2:     batteryPercent (uint8, 0-100)
+ *   Bytes 3-4:  batteryMilliVolts (uint16, little-endian)
+ *   Byte 5:     checksum (~sum of bytes 0-4)
+ */
+function parseBatteryPacket(data: DataView): { percent: number; milliVolts: number } | null {
+    if (data.byteLength < 6) {
+        return null;
+    }
+
+    // Verify start marker and identifier
+    const startMarker = data.getUint8(0);
+    const identifier = data.getUint8(1);
+
+    if (startMarker !== 0x21 || identifier !== 0x42) { // '!' and 'B'
+        return null;
+    }
+
+    // Verify checksum
+    let checksum = 0;
+    for (let i = 0; i < 5; i++) {
+        checksum += data.getUint8(i);
+    }
+    checksum = (~checksum) & 0xFF;
+
+    if (data.getUint8(5) !== checksum) {
+        return null;
+    }
+
+    // Parse battery data
+    const percent = data.getUint8(2);
+    const milliVolts = data.getUint16(3, true); // little-endian
+
+    return { percent, milliVolts };
+}
+
 export interface UseBluetoothOptions {
     onQuaternion?: (q: { w: number; x: number; y: number; z: number }) => void;
     onLinearAccel?: (a: { x: number; y: number; z: number }) => void;
     onMagnetometer?: (m: { x: number; y: number; z: number }) => void;
+    onBattery?: (b: { percent: number; milliVolts: number }) => void;
     onDisconnect?: () => void;
 }
 
 export function useBluetooth(options: UseBluetoothOptions = {}) {
-    const { onQuaternion, onLinearAccel, onMagnetometer, onDisconnect } = options;
+    const { onQuaternion, onLinearAccel, onMagnetometer, onBattery, onDisconnect } = options;
 
     const [state, setState] = useState<BluetoothState>({
         isConnected: false,
@@ -197,6 +238,7 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
     const onQuaternionRef = useRef(onQuaternion);
     const onLinearAccelRef = useRef(onLinearAccel);
     const onMagnetometerRef = useRef(onMagnetometer);
+    const onBatteryRef = useRef(onBattery);
     const onDisconnectRef = useRef(onDisconnect);
 
     // Keep refs updated with latest callbacks
@@ -204,8 +246,9 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
         onQuaternionRef.current = onQuaternion;
         onLinearAccelRef.current = onLinearAccel;
         onMagnetometerRef.current = onMagnetometer;
+        onBatteryRef.current = onBattery;
         onDisconnectRef.current = onDisconnect;
-    }, [onQuaternion, onLinearAccel, onMagnetometer, onDisconnect]);
+    }, [onQuaternion, onLinearAccel, onMagnetometer, onBattery, onDisconnect]);
 
 
     const addEntry = useCallback((type: TerminalEntry['type'], message: string, data?: { quaternion?: TerminalEntry['quaternion'], linearAccel?: TerminalEntry['linearAccel'], magnetometer?: TerminalEntry['magnetometer'] }) => {
@@ -339,6 +382,26 @@ export function useBluetooth(options: UseBluetoothOptions = {}) {
                             onLinearAccelRef.current(linearAccel);
                         }
                         offset += 16;
+                        continue;
+                    }
+                } else {
+                    // Start marker found but packet incomplete, stop processing to wait for more data
+                    break;
+                }
+            }
+
+            // Try battery packet ('B' = 0x42, 6 bytes)
+            if (identifier === 0x42) {
+                if (offset + 6 <= buffer.length) {
+                    const packetView = new DataView(buffer.buffer, buffer.byteOffset + offset, 6);
+                    const battery = parseBatteryPacket(packetView);
+
+                    if (battery) {
+                        // Don't log battery to terminal (too noisy), just call callback
+                        if (onBatteryRef.current) {
+                            onBatteryRef.current(battery);
+                        }
+                        offset += 6;
                         continue;
                     }
                 } else {

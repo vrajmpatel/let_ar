@@ -18,6 +18,8 @@ export default function Home() {
   const [replay, setReplay] = useState<ReplaySessionV1 | null>(null);
   const [isReplaying, setIsReplaying] = useState(false);
   const [replayProgress, setReplayProgress] = useState<{ currentFrame: number; totalFrames: number } | null>(null);
+  const [battery, setBattery] = useState<{ percent: number; milliVolts: number } | null>(null);
+  const [isDeviceConnected, setIsDeviceConnected] = useState(false);
 
   const ekfTrackerRef = useRef<EKFTracker | null>(null);
   const lastQuaternionRef = useRef<Quaternion | null>(null);
@@ -91,6 +93,16 @@ export default function Home() {
     }
   }, [isReplaying, isPositionLocked, isCalibrating]);
 
+  const handleBattery = useCallback((b: { percent: number; milliVolts: number }) => {
+    setBattery(b);
+    // Mark as connected when we receive battery data
+    setIsDeviceConnected(true);
+  }, []);
+
+  const handleConnect = useCallback(() => {
+    setIsDeviceConnected(true);
+  }, []);
+
   const handleDisconnect = useCallback(() => {
     if (ekfTrackerRef.current) {
       ekfTrackerRef.current.reset();
@@ -100,6 +112,9 @@ export default function Home() {
     if (isCalibrating) {
       cancelCalibration();
     }
+    // Clear battery and connection state on disconnect
+    setBattery(null);
+    setIsDeviceConnected(false);
     setIsReplaying(false);
     setReplay(null);
   }, [isCalibrating, cancelCalibration]);
@@ -142,6 +157,8 @@ export default function Home() {
             currentFrame: replayProgress?.currentFrame ?? 0,
             totalFrames: replayProgress?.totalFrames ?? 0,
           }}
+          battery={battery}
+          isConnected={isDeviceConnected}
         />
         <SceneContainer
           quaternion={quaternion}
@@ -160,6 +177,8 @@ export default function Home() {
           onQuaternion={handleQuaternion}
           onLinearAccel={handleLinearAccel}
           onMagnetometer={handleMagnetometer}
+          onBattery={handleBattery}
+          onConnect={handleConnect}
           onDisconnect={handleDisconnect}
           isPositionLocked={isPositionLocked}
           onTogglePositionLock={handleTogglePositionLock}
